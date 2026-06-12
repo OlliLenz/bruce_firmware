@@ -10,6 +10,7 @@ import glob
 import gzip
 from os import makedirs, remove, rename
 from os.path import basename, dirname, exists, isfile, join
+from shutil import copy2
 
 Import("env")  # type: ignore
 
@@ -17,6 +18,7 @@ FRAMEWORK_DIR = env.PioPlatform().get_package_dir("framework-arduinoespressif32-
 board_mcu = env.BoardConfig()
 mcu = board_mcu.get("build.mcu", "")
 patchflag_path = join(FRAMEWORK_DIR,mcu, "lib", ".patched")
+python_exe = env.get("PYTHONEXE", "python")
 
 # patch file only if we didn't do it befored
 if not isfile(join(FRAMEWORK_DIR,mcu, "lib", ".patched")):
@@ -25,31 +27,33 @@ if not isfile(join(FRAMEWORK_DIR,mcu, "lib", ".patched")):
         FRAMEWORK_DIR, mcu, "lib", "libnet80211.a.patched"
     )
 
+    if not isfile(original_file) and isfile("%s.old" % (original_file)):
+        copy2("%s.old" % (original_file), original_file)
+
+    patch_rc = 0
     if mcu=="esp32c5" or mcu=="esp32c6" :
-        env.Execute(
-            "pio pkg exec -p toolchain-riscv32-esp -- riscv32-esp-elf-objcopy  --weaken-symbol=ieee80211_raw_frame_sanity_check %s %s"
-            % (original_file, patched_file)
+        patch_rc = env.Execute(
+            '"%s" -m platformio pkg exec -p toolchain-riscv32-esp-elf -- riscv32-esp-elf-objcopy --weaken-symbol=ieee80211_raw_frame_sanity_check %s %s'
+            % (python_exe, original_file, patched_file)
         )
     elif mcu=="esp32p4":
-        """Do nothing"""
+        patch_rc = 1
     else:
-        env.Execute(
-            "pio pkg exec -p toolchain-xtensa-%s -- xtensa-%s-elf-objcopy  --weaken-symbol=ieee80211_raw_frame_sanity_check %s %s"
-            % (mcu, mcu, original_file, patched_file)
+        patch_rc = env.Execute(
+            '"%s" -m platformio pkg exec -p toolchain-xtensa-esp-elf -- xtensa-esp-elf-objcopy --weaken-symbol=ieee80211_raw_frame_sanity_check %s %s'
+            % (python_exe, original_file, patched_file)
         )
 
-    if isfile("%s.old" % (original_file)):
-        remove("%s.old" % (original_file))
-
-    if isfile(original_file):
-        rename(original_file, "%s.old" % (original_file))
-    else:
-        print("Patch: Original file not found")
-
-    if isfile(patched_file):
+    if patch_rc == 0 and isfile(patched_file):
+        if isfile("%s.old" % (original_file)):
+            remove("%s.old" % (original_file))
+        if isfile(original_file):
+            rename(original_file, "%s.old" % (original_file))
+        else:
+            print("Patch: Original file not found")
         rename(patched_file, original_file)
     else:
-        print("Patch: Patched file not found")
+        print("Patch: libnet80211 patch skipped; keeping original archive")
 
 
     def _touch(path):
@@ -92,30 +96,31 @@ def load_checksum_file(input_file):
         return f.readline().strip()
 
 
+def minify_remote(src, url, label):
+    original = src.read()
+    try:
+        minify_req = requests.post(
+            url,
+            {"input": original.decode("utf-8")},
+            timeout=10,
+        )
+        minify_req.raise_for_status()
+        return minify_req.text.encode("utf-8")
+    except requests.RequestException as e:
+        print(f"[GZIP & EMBED INTO HEADER] - {label} minifier unavailable, using original: {e}")
+        return original
+
+
 def minify_css(c):
-    minify_req = requests.post(
-        "https://www.toptal.com/developers/cssminifier/api/raw",
-        {"input": c.read().decode('utf-8')},
-    )
-    return c if minify_req is False else minify_req.text.encode('utf-8')
+    return minify_remote(c, "https://www.toptal.com/developers/cssminifier/api/raw", "CSS")
 
 
 def minify_js(js):
-    minify_req = requests.post(
-        'https://www.toptal.com/developers/javascript-minifier/api/raw',
-        {'input': js.read().decode('utf-8')},
-        timeout=10
-    )
-    return js if minify_req is False else minify_req.text.encode('utf-8')
+    return minify_remote(js, "https://www.toptal.com/developers/javascript-minifier/api/raw", "JS")
 
 
 def minify_html(html):
-    minify_req = requests.post(
-        'https://www.toptal.com/developers/html-minifier/api/raw',
-        {'input': html.read().decode('utf-8')},
-        timeout=10
-    )
-    return html if minify_req is False else minify_req.text.encode('utf-8')
+    return minify_remote(html, "https://www.toptal.com/developers/html-minifier/api/raw", "HTML")
 
 
 # gzip web files

@@ -30,12 +30,16 @@ void BruceConfigPins::fromJson(JsonObject obj) {
 
     JsonObject root = obj[mac].as<JsonObject>();
 
+#if defined(FORCE_DEFAULT_ROTATION) && FORCE_DEFAULT_ROTATION
+    rotation = ROTATION;
+#else
     if (!root["rot"].isNull()) {
         rotation = root["rot"].as<int>();
     } else {
         count++;
         log_e("Fail");
     }
+#endif
 
     if (!root["bleName"].isNull()) {
         bleName = root["bleName"].as<String>();

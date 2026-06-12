@@ -18,6 +18,8 @@
 #include "../m5stack-dinmeter/pins_arduino.h"
 #elif ARDUINO_M5STACK_CORE
 #include "../m5stack-core/pins_arduino.h"
+#elif ARDUINO_ODROID_GO
+#include "../odroid-go/pins_arduino.h"
 #elif ARDUINO_M5STACK_CORES3
 #include "../m5stack-cores3/pins_arduino.h"
 #elif ARDUINO_M5STACK_CORE2

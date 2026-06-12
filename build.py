@@ -1,5 +1,6 @@
 from pathlib import Path
 import csv
+import shutil
 from SCons.Script import Import
 
 # Import PlatformIO's SCons environment
@@ -22,7 +23,7 @@ boot_offset = BOOT_OFFSETS.get(mcu, 0x0000)  # safe fallback
 
 # Default offsets (adjust if your partitions.csv uses custom addresses)
 PART_TABLE_OFFSET = 0x8000
-APP_OFFSET        = 0x10000
+DEFAULT_APP_OFFSET = 0x10000
 
 # Paths
 build_dir = Path(senv.subst("$BUILD_DIR"))
@@ -34,6 +35,8 @@ part_bin = build_dir / "partitions.bin"
 app_bin  = build_dir / "firmware.bin"
 
 out_bin  = proj_dir / f"Bruce-{pioenv}.bin"
+app_out_name = env.GetProjectOption("custom_app_bin_name", default="")
+app_out_bin = proj_dir / app_out_name if app_out_name else None
 
 # Esptool from PlatformIO + Python executable
 esptool_pkg = senv.PioPlatform().get_package_dir("tool-esptoolpy")
@@ -65,7 +68,7 @@ def _merge_bins_callback(target, source, env):
     )
     part_csv = proj_dir / part_csv_name if part_csv_name else proj_dir / "partitions.csv"
     ota_size = None
-    ota0_offset = None
+    app_offset = DEFAULT_APP_OFFSET
     if part_csv.exists():
         with open(part_csv, newline="") as f:
             reader = csv.reader(f)
@@ -80,7 +83,7 @@ def _merge_bins_callback(target, source, env):
                 if subtype == "ota_0" and ota_size is None:
                     try:
                         ota_size = int(size, 0)
-                        ota0_offset = int(offset, 0)
+                        app_offset = int(offset, 0)
                     except ValueError:
                         pass
 
@@ -105,7 +108,7 @@ def _merge_bins_callback(target, source, env):
         "--output", q(out_bin),
         hex(boot_offset), q(boot_bin),
         hex(PART_TABLE_OFFSET), q(part_bin),
-        hex(APP_OFFSET), q(app_bin),
+        hex(app_offset), q(app_bin),
     ])
 
     print("[merge_bin] Merging binaries:")
@@ -120,14 +123,18 @@ def _merge_bins_callback(target, source, env):
         except FileNotFoundError:
             size = 0
         print(f"[merge_bin] Success -> {out_bin} ({size} bytes)")
-        if ota0_offset:
-            if size < (ota0_offset + ota_size):
+        if ota_size:
+            if size < (app_offset + ota_size):
                 print("[Final bin] Valid bin to upload")
             else:
                 print(
-                    f"[Final bin] Error: bin size 0x{size:X} exceeds ota_0 offset 0x{(ota0_offset+ota_size):X}"
+                    f"[Final bin] Error: bin size 0x{size:X} exceeds app partition end 0x{(app_offset+ota_size):X}"
                 )
                 env.Exit(1)
+
+    if app_out_bin:
+        shutil.copy2(app_bin, app_out_bin)
+        print(f"[app_bin] Success -> {app_out_bin} ({app_out_bin.stat().st_size} bytes)")
 
 # Automatically run after firmware.bin is generated
 senv.AddPostAction(str(app_bin), _merge_bins_callback)
